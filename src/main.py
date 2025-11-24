@@ -1,5 +1,6 @@
 import argparse
 import time
+
 import cv2
 
 from .blink_tracker import BlinkTracker
@@ -14,14 +15,38 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fps", type=float, default=30.0, help="Assumed camera fps for debounce")
     parser.add_argument("--headless", action="store_true", help="Disable video preview, log to stdout")
     parser.add_argument("--noshow", action="store_true", help="Alias for --headless")
-    parser.add_argument("--pitch-threshold", type=float, default=0.025, help="Pitch delta to classify nodding")
+    parser.add_argument("--pitch-threshold", type=float, default=10.0, help="Pitch degrees to classify nodding")
     parser.add_argument("--landmarks", action="store_true", help="Overlay landmarks for debugging")
+    parser.add_argument("--hud-width", type=int, default=380, help="HUD box width in pixels")
+    parser.add_argument("--hud-height", type=int, default=120, help="HUD box height in pixels")
+    parser.add_argument("--hud-margin", type=int, default=10, help="Margin from top-left corner for HUD")
+    parser.add_argument("--pitch-alpha", type=float, default=0.2, help="Smoothing for pitch degrees")
     return parser.parse_args()
+
+
+hud_bg_color = (20, 20, 20)
+hud_border_color = (0, 255, 0)
+hud_text_color = (220, 220, 220)
+
+
+def _draw_hud(frame, caption_lines, hud_rect):
+    x, y, w, h = hud_rect
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (x, y), (x + w, y + h), hud_bg_color, -1)
+    frame[:] = cv2.addWeighted(overlay, 0.6, frame, 0.4, 0)
+    cv2.rectangle(frame, (x, y), (x + w, y + h), hud_border_color, 2)
+    line_y = y + 25
+    for line in caption_lines:
+        cv2.putText(frame, line, (x + 15, line_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, hud_text_color, 2)
+        line_y += 28
 
 
 def main() -> None:
     args = parse_args()
-    detector = MediapipeEyelidDetector(eyelid_threshold=args.threshold)
+    detector = MediapipeEyelidDetector(
+        eyelid_threshold=args.threshold,
+        pitch_alpha=args.pitch_alpha,
+    )
     tracker = BlinkTracker(
         blink_confirm_frames=max(1, int(args.fps * 0.1)),
         window_seconds=args.window,
@@ -45,21 +70,29 @@ def main() -> None:
             eyelid_state = "closed" if blink_state.is_closed else "open"
             is_nodding = measurement.pitch_deg > args.pitch_threshold
             nod_state = "nodding" if is_nodding else "steady"
-            caption = (
-                f"state: {eyelid_state}/{nod_state} | EAR: {measurement.eye.eye_aspect_ratio:.3f} | "
-                f"blink/min: {blink_state.blink_rate_per_min:.1f} | total: {blink_state.total_blinks}"
-            )
+
+            caption_lines = [
+                f"eyes: {eyelid_state} | EAR {measurement.eye.eye_aspect_ratio:.3f}",
+                f"nod: {nod_state} ({measurement.pitch_deg:.1f}°)",
+                f"blink/min: {blink_state.blink_rate_per_min:.1f}",
+                f"total blinks: {blink_state.total_blinks}",
+            ]
 
             if args.headless or args.noshow:
-                print(f"{time.time():.3f} {caption}")
+                print(f"{time.time():.3f} " + " | ".join(caption_lines))
             else:
-                overlay = frame.copy()
                 if args.landmarks and measurement.landmarks_px is not None:
-                    for x, y in measurement.landmarks_px.astype(int):
-                        cv2.circle(overlay, (x, y), 1, (255, 0, 0), -1)
-                    frame = cv2.addWeighted(overlay, 0.6, frame, 0.4, 0)
+                    for x_lm, y_lm in measurement.landmarks_px.astype(int):
+                        cv2.circle(frame, (x_lm, y_lm), 1, (255, 0, 0), -1)
 
-                cv2.putText(frame, caption, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                hud_rect = (
+                    args.hud_margin,
+                    args.hud_margin,
+                    args.hud_width,
+                    args.hud_height,
+                )
+                _draw_hud(frame, caption_lines, hud_rect)
+
                 cv2.imshow("Eyelid Monitor", frame)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break

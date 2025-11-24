@@ -1,6 +1,6 @@
-import math
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Iterable, Optional, Tuple
 
 import cv2
 import mediapipe as mp
@@ -34,8 +34,11 @@ class MediapipeEyelidDetector:
         detection_confidence: float = 0.6,
         tracking_confidence: float = 0.6,
         eyelid_threshold: float = 0.21,
+            pitch_alpha: float = 0.2,
     ) -> None:
         self.eyelid_threshold = eyelid_threshold
+        self.pitch_alpha = pitch_alpha
+        self._pitch_estimate: Optional[float] = None
         self.face_mesh = mp.solutions.face_mesh.FaceMesh(
             max_num_faces=1,
             refine_landmarks=True,
@@ -93,4 +96,15 @@ class MediapipeEyelidDetector:
             h, w = frame.shape[:2]
             landmarks_px = np.column_stack((coords[:, 0] * w, coords[:, 1] * h))
 
-        return FaceMeasurement(eye=eye_measurement, pitch_deg=pitch_value, landmarks_px=landmarks_px)
+        if self._pitch_estimate is None:
+            self._pitch_estimate = pitch_value
+        else:
+            self._pitch_estimate = (
+                    self.pitch_alpha * pitch_value + (1.0 - self.pitch_alpha) * self._pitch_estimate
+            )
+
+        return FaceMeasurement(
+            eye=eye_measurement,
+            pitch_deg=float(self._pitch_estimate),
+            landmarks_px=landmarks_px,
+        )
